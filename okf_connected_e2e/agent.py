@@ -1,8 +1,10 @@
-"""ADK agent on Gemini that answers one governed finance question through the connected run.
+"""ADK agent on Gemini that answers one governed finance question through the RFC's full path.
 
-The agent has exactly one tool. The tool runs the connected end-to-end path (the spike's `okf_bq_graph.connected`) and
-returns the validated, identifier-free payload from `payload.tool_payload`. The number reaches the model only when the
-run's enforcing consumer released it; otherwise the payload says REFUSED and why.
+The agent has exactly one tool. By default the tool publishes the synthetic Acme bundle in BigQuery and then runs the
+connected end-to-end path against that publication (the spike's `okf_bq_graph.publish_connected`); with
+`--consume-only` it runs the connected path alone. It returns the validated, identifier-free payload from
+`payload.tool_payload`. The number reaches the model only when the run's enforcing consumer released it and the whole
+run held; otherwise the payload says REFUSED or withheld, and why.
 """
 from __future__ import annotations
 
@@ -17,9 +19,11 @@ INSTRUCTION = (
     "Always call governed_gross_margin before answering; never compute, estimate or recall a number yourself. "
     "If the tool's answer is present, quote it verbatim and say the receipt verdict and the run verdict. "
     "If the answer is null, say the number is withheld and quote the tool's withheld reason and run verdict. "
-    "Then summarise in two or three short sentences what the run checked: the Catalog read, the pinned publication, "
-    "governed retrieval, the fact read-back, the receipt, and that after access was revoked a fresh request, a bypass "
-    "and the stored receipt were all refused. Use only the tool's fields. Do not print identifiers, SQL, principals or paths. "
+    "Then summarise in three or four short sentences what the run checked, in order: when the tool has a publication "
+    "block, that the publication was first published in BigQuery (READY, head switched) and the Catalog entry was written "
+    "from it; then the requester's own Catalog read, the pinned publication, governed retrieval, the fact read-back, the "
+    "receipt, and that after access was revoked a fresh request, a bypass and the stored receipt were all refused. "
+    "Use only the tool's fields. Do not print identifiers, SQL, principals or paths. "
     "State that the data is synthetic, the APIs are live GCP when the tool says so, and that this is one run, not readiness."
 )
 _JAN_2026 = re.compile(r"(2026-01(?:-\d\d)?|jan(?:uary)?\.?\s*2026)", re.IGNORECASE)
@@ -30,17 +34,18 @@ def is_declared_period(period: str) -> bool:
 
 
 def make_tool(run: Callable[[], dict], on_payload: Optional[Callable[[dict], None]] = None) -> Callable[[str], dict]:
-    """`run()` performs the connected run and returns `connected.summary(out)`."""
+    """`run()` performs the run and returns its summary (`publish_connected.summary` or `connected.summary`)."""
 
     def governed_gross_margin(period: str) -> dict:
-        """Acme's governed gross margin for a period, released only through the connected OKF path.
+        """Acme's governed gross margin for a period, released only through the OKF path: publish in BigQuery, then
+        Catalog discovery, pinned publication, governed retrieval, access checks, receipt and enforcing consumer.
 
         Args:
           period: the reporting period. Only January 2026 ("2026-01") is declared by the pinned computation.
 
         Returns:
-          The consumer decision, the released answer when RELEASED, the receipt verdict and the access and revocation
-          checks of the run, with no identifiers.
+          The consumer decision, the released answer when the run held, the publication and receipt verdicts and the
+          access and revocation checks of the run, with no identifiers.
         """
         if not is_declared_period(period):
             return {"decision": "REFUSED", "answer": None,
@@ -61,7 +66,7 @@ def build_agent(tool: Callable[..., dict], model_id: str) -> Any:
     return Agent(
         name="okf_connected_e2e_agent",
         model=Gemini(model=model_id, retry_options=types.HttpRetryOptions(attempts=3)),
-        description="Answers one governed gross-margin question through the connected OKF path; synthetic data.",
+        description="Answers one governed gross-margin question through the OKF publish-then-consume path; synthetic data.",
         instruction=INSTRUCTION,
         tools=[tool],
     )

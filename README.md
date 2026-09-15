@@ -1,54 +1,93 @@
 # okf-connected-e2e
 
-This repository holds the runnable CLI and ADK agent for the OKF RFC's **connected end-to-end run**. The RFC's "What is still open" section asks for:
+The runnable CLI and ADK agent for the OKF RFC's **full path**, run as one invocation:
 
-> One run doing all of it at once: catalog discovery, pinned publication, governed retrieval, caller-delegated
-> computation, result-bound receipt and enforcing consumer, with access and revocation checks holding throughout.
+> Author/Publish (BigQuery) → Discover (Catalog) → pin and retrieve a fixed context → evaluate current access, including
+> revocation → validate the calculation (result-bound receipt) → enforcing consumer.
 
-The runner is `okf_bq_graph.connected`, in the spike package at
-[`caohy1988.github.io/rfc/spikes/bq-graph`](https://github.com/caohy1988/caohy1988.github.io/tree/rfc/connected-e2e/rfc/spikes/bq-graph).
-This repository drives it from:
+The RFC places the serving authority in BigQuery's relational deployment head, with Catalog as the governed discovery
+projection (detailed RFC §04). It advances the head atomically before Catalog is reconciled (§05). The landing page's
+"three as one path" starts from a live catalog read of that publication. This repository runs that order.
+
+The runners live in the spike package at
+[`caohy1988.github.io/rfc/spikes/bq-graph`](https://github.com/caohy1988/caohy1988.github.io/tree/main/rfc/spikes/bq-graph):
+- `okf_bq_graph.publish_connected` covers publish then consume, and is the default;
+- `okf_bq_graph.connected` covers consume only.
+
+This repository drives them from:
 - a command line (`okf-e2e run`);
-- an ADK agent on **Gemini 3.8 Flash** (`okf-e2e agent`), which gets exactly one tool, and that tool performs the run.
+- an ADK agent on **Gemini 3.8 Flash** (`okf-e2e agent`). The agent gets exactly one tool, and that tool performs the
+  run.
 
 It is experimental. The data is synthetic, and one run is not readiness.
 
 ## What one run does
 
-The run uses one requester, a restricted service account reached through IAM impersonation, on every execution leg:
-the Catalog read, the BigQuery reads and the receipt computation. It covers five cases, in order.
+### 1. Author and publish in BigQuery (operator)
+
+1. The pinned synthetic Acme bundle (`knowledge-catalog@31da799`) is compiled into an immutable projection.
+2. It is appended to a **run-owned, relational-only BigQuery dataset**, and every row is read back and validated
+   against the compiled manifest.
+3. The publication is marked `READY`, and the head is advanced with one atomic `MERGE`. Every step is a real BigQuery
+   job, and each job id is printed as it completes.
+4. Only then is a run-owned Catalog entry written. Its runtime pin is generated from the `READY` rows, and the entry is
+   read back through the Catalog parser.
+
+The run records the RFC §05 states it reached: `PLANNED → PREPARING → BQ_STAGED → BQ_COMMITTED → KC_APPLIED → COMPLETE`.
+
+### 2. Consume through the connected path (restricted requester)
+
+The requester is a restricted service account reached through IAM impersonation. It is used on every execution leg:
+the Catalog read, the BigQuery reads and the receipt computation. The run covers five cases, in order.
 
 | Case | What happens | Expected |
 |---|---|---|
-| `connected-approved` | The requester reads the Catalog entry itself, getting a validated pin. Next comes the exact READY publication (head observed, never followed), then governed retrieval, then a payload check against the clean pinned source. It then binds to the receipt example's declaration and gets authorization under the requester. After that, the synthetic facts are read back against their selected digest, the receipt CLI runs under the requester, and the enforcing consumer decides. | RELEASED on VERIFIED |
+| `connected-approved` | The requester reads the entry itself and gets a validated pin. It resolves exactly the publication step 1 published (head observed, never followed), retrieves the declared calculation under governed retrieval, and passes a payload check against the clean pinned source. It then binds to the receipt example, gets authorization, reads the synthetic facts back against their digest and runs the receipt CLI. The enforcing consumer decides. | RELEASED on VERIFIED |
 | `connected-sql-substitution` | Same path, but the executed SQL is swapped. | REFUSED (receipt REJECTED) |
-| `connected-denied-intermediate` | A row policy hides the intermediate concept, so the seed is visible and no path returns. | REFUSED, nothing executed |
-| `connected-unauthorized-output` | The pin, retrieval and bind all hold, but the requester cannot read the computation's tables. | REFUSED before execution |
-| `connected-revocation` | Access is observed present, then Catalog, graph and fact access are revoked, and each denial is observed. After that, a fresh request, a bypass with the cached pin, and the stored receipt are each tried. | all refused, nothing executed |
+| `connected-denied-intermediate` | A row policy hides the intermediate concept, so no path returns. | REFUSED, nothing executed |
+| `connected-unauthorized-output` | The pin, retrieval and bind hold, but the requester cannot read the computation's tables. | REFUSED before execution |
+| `connected-revocation` | Access is observed present, then revoked, and the denial is observed. A fresh request, a cached-pin bypass and the stored receipt are then each tried. | all refused, nothing executed |
 
-The run grants Catalog viewer on one entry group, dataset reads and a row-policy grantee. Each is snapshotted, then
-restored and read back. Every BigQuery job it submits is read back, and its identity is bound to the role that
-submitted it. The verdict is `E2E_CONNECTED` only when every case is MET, identity is BOUND, no job is unresolved, and
-both restores are VERIFIED.
+### 3. Teardown and verdict
+
+Teardown restores grants and reads them back, then deletes the run-owned entry and dataset and reads back their
+absence.
+
+The verdict is **`E2E_PUBLISH_CONNECTED`** only when all of these hold:
+- the publication was `READY` and the head was observed switched;
+- the Catalog pin parsed OK;
+- the consumer served exactly that publication in that dataset;
+- the connected run is `E2E_CONNECTED`;
+- every author job ran as the operator;
+- the originals are unchanged;
+- cleanup is `COMPLETE`.
 
 **Honesty labels**
-- Data: synthetic Acme fixture, no customer data. APIs: live GCP in `--live`, emulated in `--hermetic`.
-- Engine: relational fallback, not BigQuery Graph / GQL.
-- Receipt: the SDK example's own verifier with a requester-held key, and no independent attester.
-- The denied-intermediate seed is an injected legacy seed on the `_rls` copy, not a Catalog discovery.
-- Catalog concept seeds disable the retrieval cache, so revocation is not shown on a cached replay.
-- n = 1, with no latency or cost benchmark.
+- **Data and APIs.** Synthetic Acme fixture, no customer data. APIs are live GCP in `--live` and emulated in
+  `--hermetic`.
+- **Engine.** Relational fallback, not BigQuery Graph / GQL; access is not shown inside graph queries.
+- **Receipt.** The SDK example's own verifier with a requester-held key; no independent attester.
+- **Publication id.** Content-addressed from the pinned source. The run deploys the same id the long-lived spike
+  dataset holds, into a fresh dataset with fresh rows and jobs. It is a new deployment, not a new knowledge revision.
+- **§05 is simplified.** One owned dataset with `active_publication`; no `sync_id`, `deployment_heads` or `*_current`
+  views.
+- **Access setup.** The harness grants the requester Catalog viewer on the entry group.
+- **Denied intermediate.** Uses an injected legacy seed on the long-lived `_rls` copy.
+- **Sample.** n = 1, with no latency or cost benchmark.
 
 ## Prerequisites (live)
 
-- `gcloud auth application-default login` as an operator on `test-project-0728-467323`. The operator needs
-  `roles/iam.serviceAccountTokenCreator` on the restricted service account, plus rights to change the demo entry
-  group's IAM policy and the spike datasets' ACLs.
-- The receipt SDK checkout at `6719eb5` (`OKF_SDK_ROOT`), clean.
-- `knowledge-catalog` at `31da799` (`OKF_ACME_ROOT` pointing at `okf/bundles/acme_retail`), clean.
-- An interpreter with user site-packages enabled, for the SDK child (`OKF_SDK_PYTHON`, for example Homebrew
-  `python3.13`). A virtualenv disables `usercustomize`, which carries the requester's e-mail-scope shim.
-- Vertex AI access to `gemini-3.8-flash` in location `global`.
+- **Operator.** `gcloud auth application-default login` as an operator on `test-project-0728-467323`. The operator
+  needs:
+  - BigQuery dataset create/delete;
+  - Dataplex entry create/delete in the demo entry group, and rights to change that group's IAM policy;
+  - `roles/iam.serviceAccountTokenCreator` on the restricted service account.
+- **Receipt SDK.** A clean checkout at `6719eb5` (`OKF_SDK_ROOT`).
+- **Acme bundle.** A clean `knowledge-catalog` checkout at `31da799`, with `OKF_ACME_ROOT` pointing at
+  `okf/bundles/acme_retail`.
+- **SDK child interpreter.** One with user site-packages enabled (`OKF_SDK_PYTHON`, for example Homebrew `python3.13`).
+  A virtualenv disables `usercustomize`, which carries the requester's e-mail-scope shim.
+- **Model.** Vertex AI access to `gemini-3.8-flash` in location `global`.
 
 ## Run
 
@@ -56,24 +95,35 @@ both restores are VERIFIED.
 python3.13 -m venv .venv && . .venv/bin/activate && pip install -e '.[dev]'
 okf-e2e bootstrap && export OKF_SPIKE_ROOT=$PWD/.spike/rfc/spikes/bq-graph   # or point at an existing checkout
 pytest -q                                                                   # this repo's tests (no cloud)
-okf-e2e run --hermetic                                                      # the whole run against emulation
+okf-e2e run --hermetic                                                      # the whole path against emulation
 export OKF_SDK_PYTHON=/usr/local/opt/python@3.13/bin/python3.13
-okf-e2e run --live                                                          # live GCP, no model
+okf-e2e run --live                                                          # live GCP: publish in BigQuery, then consume; no model
 DEMO_MODEL_ID=gemini-3.8-flash okf-e2e agent --live "What was Acme's gross margin for January 2026, and can I trust the number?"
+okf-e2e run --live --consume-only                                           # PR #1 behaviour: consume a publication that already existed
 ```
 
 `DEMO_MODEL_ID` defaults to `gemini-3.8-flash`, and model ids older than Gemini 3 are refused. The banner prints the
-model id, project, data and API labels, and the spike commit.
+model id, project, data, publish and API labels, and the spike commit.
 
 ## What the model sees
 
-`payload.tool_payload` projects the run summary into the consumer decision, the released answer (only when RELEASED),
-the receipt verdict, per-case decisions, access and revocation observations, the identity status and teardown. It
-**refuses** a payload containing any of:
+`payload.tool_payload` projects the run summary into:
+- the consumer decision and the released answer (only when the whole run held);
+- a `publication` block: authority `BigQuery`, the §05 states, `READY`, head switched, the author job count and
+  identity, the Catalog pin, whether the consumer served this publication, and cleanup;
+- the receipt verdict and per-case decisions;
+- the access and revocation observations, identity and teardown.
+
+It **refuses** a payload containing any of:
 - an e-mail or principal;
 - a scoped concept or publication id, or `concept_version_id`;
 - SQL text;
 - a bundle path or a local path.
 
-The retained evidence lives with the spike, under `rfc/spikes/bq-graph/evidence/connected-e2e/<run_id>/`. It includes
-the agent transcript `agent_transcript.json`.
+Job ids and the publication id are printed to the terminal only.
+
+Retained evidence lives with the spike, under `rfc/spikes/bq-graph/evidence/publish-connected/<run_id>/`. It holds:
+- `publish/`: the lifecycle journal, ownership and cleanup receipts;
+- `connected/<e2e run id>/`: the connected record;
+- `publish_connected_live.json`;
+- `agent_transcript.json`.
