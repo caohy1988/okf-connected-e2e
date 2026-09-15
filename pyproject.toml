@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "okf-connected-e2e"
-version = "0.1.0"
-description = "Runnable connected end-to-end OKF run (Catalog discovery -> pinned publication -> governed retrieval -> receipt -> enforcing consumer, with access and revocation checks) plus an ADK agent on Gemini 3.8 Flash. Experimental; synthetic data."
+version = "0.2.0"
+description = "Runnable OKF RFC full path (publish in BigQuery -> Catalog discovery -> pinned publication -> governed retrieval -> receipt -> enforcing consumer, with access and revocation checks) plus an ADK agent on Gemini 3.8 Flash. Experimental; synthetic data."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
