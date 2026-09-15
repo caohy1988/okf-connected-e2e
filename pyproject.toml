@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "okf-connected-e2e"
+version = "0.1.0"
+description = "Runnable connected end-to-end OKF run (Catalog discovery -> pinned publication -> governed retrieval -> receipt -> enforcing consumer, with access and revocation checks) plus an ADK agent on Gemini 3.8 Flash. Experimental; synthetic data."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "google-adk>=1.14",
+    "google-cloud-bigquery==3.45.0",
+    "google-auth>=2.40",
+    "requests>=2.31",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+okf-e2e = "okf_connected_e2e.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["okf_connected_e2e*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
