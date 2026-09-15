@@ -15,7 +15,7 @@ from typing import Optional
 
 SPIKE_REPO = "https://github.com/caohy1988/caohy1988.github.io"
 SPIKE_SUBDIR = "rfc/spikes/bq-graph"
-SPIKE_REF = "7fda48594bafd87abee6c23d142e624f3a2e0fa4"   # rfc/connected-e2e: okf_bq_graph.connected/0.1.0
+SPIKE_REF = "9ace9889bcf2571d444e650522957eee525e8840"   # rfc/connected-e2e: okf_bq_graph.connected/0.1.0
 
 
 def _git(root: Path, *args: str) -> Optional[str]:

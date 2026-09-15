@@ -48,9 +48,17 @@ def tool_payload(summary: dict) -> dict:
     decision = approved.get("decision")
     live = summary.get("mode") == "live"
     ident = summary.get("identity") or {}
+    connected = summary.get("verdict") == "E2E_CONNECTED"
+    withheld = None
+    if decision != "RELEASED":
+        withheld = "the enforcing consumer refused the approved request"
+    elif not connected:
+        withheld = (f"run verdict {summary.get('verdict')} at {summary.get('broken_at')}: the access and revocation checks did not all "
+                    "hold in this run, so its number is not handed to the agent")
     payload = {
         "decision": decision,
-        "answer": summary.get("answer") if decision == "RELEASED" else None,
+        "answer": summary.get("answer") if decision == "RELEASED" and connected else None,
+        "withheld": withheld,
         "run_verdict": summary.get("verdict"),
         "broken_at": summary.get("broken_at"),
         "run_id": summary.get("run_id"),

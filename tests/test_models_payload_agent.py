@@ -44,7 +44,16 @@ def test_tool_payload_is_identifier_free_and_keeps_the_decision():
 def test_answer_is_withheld_unless_released():
     s = copy.deepcopy(SUMMARY)
     s["cases"]["connected-approved"]["decision"] = "REFUSED"
-    assert P.tool_payload(s)["answer"] is None
+    p = P.tool_payload(s)
+    assert p["answer"] is None and "refused" in p["withheld"]
+
+
+def test_answer_is_withheld_when_the_run_did_not_connect():
+    """The first live run released the approved number while a later access case failed: the agent must not get it."""
+    s = dict(copy.deepcopy(SUMMARY), verdict="E2E_BROKEN", broken_at="connected-unauthorized-output")
+    p = P.tool_payload(s)
+    assert p["decision"] == "RELEASED" and p["answer"] is None and "E2E_BROKEN" in p["withheld"]
+    assert P.tool_payload(SUMMARY)["withheld"] is None
 
 
 @pytest.mark.parametrize("field,value,hit", [
